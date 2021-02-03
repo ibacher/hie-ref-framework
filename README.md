@@ -13,5 +13,3 @@ A template for an HIE architecture basaed on FHIR, OpenHIE, OpenCR, OpenMRS, and
 ### OpenELIS
 
 ### HAPI FHIR JPA Server
-
-

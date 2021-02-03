@@ -1,0 +1,223 @@
+version: '2.4'
+
+## Port Assignments:
+##  See .env file
+
+## Container debugging: 
+# 1. append the following lines to desired container 
+# 2. boot up the container using `docker-compose up -d`
+# 3 run `docker exec -it <container-name> bash` to start interactive shell
+# 
+#    tty: true
+#    stdin_open: true
+#    entrypoint: bash
+
+## Utility for booting up placeholder page:
+# `docker run --hostname openhim-placeholder --network shared-health-record_sedish --name openhim-placeholder -e MESSAGE=OPENHIM-PLACEHOLDER -e PORT=3000 -d docker.io/sroze/landing-page:latest`
+
+services:
+  static:
+    image: docker.io/sroze/landing-page:latest
+    container_name: homepage
+    hostname: homepage
+    environment: 
+      - MESSAGE=SEDISH-HAITI-DEFAULT
+    networks: 
+      - sedish
+
+  ###
+  # nginx reverse proxy
+  # TODO: set up to use non-root user. See https://www.rockyourcode.com/run-docker-nginx-as-non-root-user/
+  # TODO: Run letsencrypt as docker container: https://hub.docker.com/r/certbot/certbot/
+  ###
+  nginx:
+    image: nginx:latest
+    container_name: nginx
+    hostname: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /home/ubuntu/local/letsencrypt/archive/sedish-haiti.org:/etc/letsencrypt
+      - ./docker/nginx/data/nginx.conf:/etc/nginx/nginx.conf
+      - ./docker/nginx/data/www:/var/www
+    networks:
+      - sedish
+    depends_on: 
+      - static
+      - openhim-console
+      - openhim-core
+      - opencr-fhir
+      - shr-fhir
+      - shr
+      - opencr
+      - isanteplus-demo
+  ###
+  # OpenCR
+  ###
+  opencr:
+    container_name: opencr
+    hostname: opencr
+    build: ./docker/opencr
+    ports:
+      - "${CR_PORT}:3000"
+    depends_on:
+      - opencr-fhir
+      - opencr-es
+    restart: on-failure
+    environment:
+      - NODE_ENV=docker
+    networks:
+      - sedish
+  opencr-fhir:
+    build: ./docker/opencr-hapi
+    container_name: opencr-fhir
+    hostname: opencr-fhir
+    restart: unless-stopped
+    ports:
+      - "${CR_FHIR_PORT}:8080"
+    cpus: .5
+    mem_limit: 1GB
+    networks:
+      - sedish
+  opencr-es:
+    container_name: es
+    image: intrahealth/elasticsearch:latest
+    environment:
+      - node.name=es01
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - data01:/usr/share/elasticsearch/data
+    ports:
+      - "${CR_ES_PORT}:9200"
+    networks:
+      - sedish
+
+  ###
+  # SHR
+  ###
+  shr:
+    container_name: shr
+    hostname: shr
+    build:
+      context: shr
+    ports:
+      - "${SHR_PORT}:3000"
+    restart: on-failure
+    environment:
+      - NODE_ENV=docker
+    depends_on: 
+      - shr-fhir
+    networks:
+      - sedish
+  shr-fhir:
+    image: "hapiproject/hapi:latest"
+    container_name: shr-fhir
+    hostname: shr-fhir
+    restart: unless-stopped
+    ports:
+      - "${SHR_FHIR_PORT}:8080"
+    volumes:
+      - hapi-data:/data/hapi
+      - ./docker/shr/hapi.properties:/conf/hapi/hapi.properties
+    environment:
+      JAVA_OPTS: '-Dhapi.properties=/conf/hapi/hapi.properties'
+    networks:
+      - sedish
+  
+  ###
+  # iSantePlus
+  ###
+  isanteplus-demo:
+    container_name: isanteplus-demo
+    hostname: isanteplus-demo
+    build: ./docker/openmrs-server
+    restart: unless-stopped
+    env_file:
+        - ./openmrs/isanteplus_demo/openmrs-server.env
+    volumes:
+      - ./openmrs/isanteplus_demo/distribution:/openmrs/distribution
+      - openmrs-data:/openmrs/data
+    networks:
+      - sedish
+
+  isanteplus-test:
+    container_name: isanteplus-test
+    hostname: isanteplus-test
+    build: ./docker/openmrs-server
+    restart: unless-stopped
+    env_file:
+        - ./openmrs/isanteplus_demo/openmrs-server.env
+    volumes:
+      - ./openmrs/isanteplus_demo/distribution:/openmrs/distribution
+      - openmrs-data:/openmrs/data
+    networks:
+      - sedish
+  ###
+  # OpenHIM
+  ###
+  openhim-core:
+    container_name: openhim-core
+    image: jembi/openhim-core:latest
+    restart: unless-stopped
+    environment:
+      mongo_url: "mongodb://${MONGO_USER}:${MONGO_PW}@openhim-db.chijnl5rwr2c.eu-central-1.docdb.amazonaws.com:27017/openhim?retryWrites=false"
+      mongo_atnaUrl: "mongodb://${MONGO_USER}:${MONGO_PW}@openhim-db.chijnl5rwr2c.eu-central-1.docdb.amazonaws.com:27017/openhim?retryWrites=false"
+      NODE_ENV: "development"
+    ports:
+      - 8080:8080
+      - 5000:5000
+      - 5001:5001
+    volumes:
+      - /home/ubuntu/local/letsencrypt/archive/sedish-haiti.org/cert1.pem:/usr/src/app/resources/certs/default/cert.pem
+      - /home/ubuntu/local/letsencrypt/archive/sedish-haiti.org/privkey1.pem:/usr/src/app/resources/certs/default/key.pem
+      - /home/ubuntu/local/letsencrypt/archive/sedish-haiti.org/cert1.pem:/etc/letsencrypt/live/openhim.jembi.org/cert.pem
+      - /home/ubuntu/local/letsencrypt/archive/sedish-haiti.org/privkey1.pem:/etc/letsencrypt/live/openhim.jembi.org/key.pem
+    healthcheck:
+      test: "curl -sSk https://openhim-core:8080/heartbeat || exit 1"
+      interval: 30s
+      timeout: 30s
+      retries: 3
+    networks:
+      - sedish
+
+  openhim-console:
+    container_name: openhim-console
+    image: jembi/openhim-console:latest
+    restart: unless-stopped
+    volumes:
+      - ./configs/openhim-console/default.json:/usr/share/nginx/html/config/default.json
+    healthcheck:
+      test: "curl -sS http://openhim-console || exit 1"
+      interval: 30s
+      timeout: 30s
+      retries: 3
+    networks:
+      - sedish
+    # tty: true
+    # stdin_open: true
+    # entrypoint: bash
+
+volumes:
+  data01:
+    driver: local
+  data02:
+    driver: local
+  data03:
+    driver: local
+  openmrs-data:
+    driver: local
+  mongo-data:
+    driver: local
+  shr:
+    driver: local
+  hapi-data:
+    driver: local
+networks:
+  sedish:

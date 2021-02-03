@@ -1,0 +1,6 @@
+[submodule "docker/shr"]
+	path = docker/shr
+	url = https://github.com/I-TECH-UW/shared-health-record.git
+[submodule "docker/opencr"]
+	path = docker/opencr
+	url = https://github.com/intrahealth/client-registry.git
